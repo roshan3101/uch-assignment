@@ -78,6 +78,16 @@ class Tender(BaseModel):
         description="IFB/Tender Notice Number"
     )
     
+    tender_fee: Optional[float] = Field(
+        None,
+        description="Tender fee amount",
+        ge=0
+    )
+    emd_amount: Optional[str] = Field(
+        None,
+        description="Earnest Money Deposit amount or text"
+    )
+    
     attachments: List[Attachment] = Field(
         default_factory=list,
         description="List of tender documents/attachments"
@@ -91,6 +101,12 @@ class Tender(BaseModel):
     location: Optional[str] = Field(None, description="Project location")
     department: Optional[str] = Field(None, description="Department name")
     category: Optional[str] = Field(None, description="Tender category")
+    
+    # Additional detail fields
+    eligibility: Optional[str] = Field(None, description="Eligibility criteria")
+    specifications: Optional[str] = Field(None, description="Technical specifications")
+    terms_conditions: Optional[str] = Field(None, description="Terms and conditions")
+    contact_info: Optional[Dict[str, str]] = Field(None, description="Contact information")
     
     raw_html_snippet: Optional[str] = Field(
         None,
