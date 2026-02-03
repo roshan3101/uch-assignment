@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from playwright.async_api import Page
+from bs4 import BeautifulSoup
 
 from scraper.models import Tender, TenderType, TenderStatus, Attachment
 
@@ -95,22 +96,16 @@ class TenderExtractor:
             # Extract all text content
             content = await page.content()
             
-            # Extract fields
-            title = await self._extract_detail_field(page, 'title')
-            organization = await self._extract_detail_field(page, 'organization')
-            description = await self._extract_description(page)
-            publish_date = await self._extract_date_field(page, 'publish')
-            closing_date = await self._extract_date_field(page, 'closing')
-            estimated_value = await self._extract_value_field(page)
-            location = await self._extract_detail_field(page, 'location')
-            category = await self._extract_detail_field(page, 'category')
-            department = await self._extract_detail_field(page, 'department')
-            ifb_number = await self._extract_ifb_number(page)
+            # Extract from all sections using new table-based methods
+            procurement_fields = await self._extract_procurement_summary_fields(page)
+            calendar_fields = await self._extract_calendar_details(page)
+            amount_fields = await self._extract_amount_details(page)
+            other_fields = await self._extract_other_details(page)
+            stages = await self._extract_tender_stages(page)
             
-            # Extract additional details
+            # Extract additional details using existing methods
             eligibility = await self._extract_eligibility(page)
             specifications = await self._extract_specifications(page)
-            terms_conditions = await self._extract_terms(page)
             terms_conditions = await self._extract_terms(page)
             contact_info = await self._extract_contact_info(page)
             tender_fee = await self._extract_tender_fee(page)
@@ -118,39 +113,92 @@ class TenderExtractor:
             
             # Refine estimated value from script if possible
             script_value = await self._extract_script_value(page, 'ecvvalue')
-            if script_value is not None:
-                estimated_value = script_value
+            estimated_value = script_value if script_value is not None else None
+            
+            # Get organization, title, location from procurement fields (preferred) or fallback
+            organization = procurement_fields.get('organization') or "Unknown Organization"
+            title = procurement_fields.get('title') or f"Tender {tender_id}"
+            location = procurement_fields.get('location')
+            department = procurement_fields.get('department')
+            ifb_number = procurement_fields.get('ifb_number')
             
             # Determine tender type and status
-            tender_type = self._determine_tender_type(title, organization, description)
+            tender_type = self._determine_tender_type(title, organization, procurement_fields.get('description'))
             tender_status = await self._extract_status(page)
+            
+            # Determine document count from specifications if possible
+            doc_count = None
+            if specifications:
+                doc_count = len(specifications.split('\n'))
             
             # Build source URL
             source_url = page.url
             
+            # Merge all extracted data
             details = {
                 'tender_id': tender_id,
-                'title': title or f"Tender {tender_id}",
-                'organization': organization or "Unknown Organization",
+                'title': title,
+                'organization': organization,
                 'tender_type': tender_type,
                 'tender_status': tender_status,
-                'publish_date': publish_date,
-                'closing_date': closing_date,
+                'publish_date': None,  # Not available in current page structure
+                'closing_date': calendar_fields.get('bid_submission_end'),
                 'estimated_value': estimated_value,
-                'description': description,
+                'description': procurement_fields.get('description'),
                 'source_url': source_url,
                 'ifb_number': ifb_number,
+                'tender_fee': tender_fee,
+                'emd_amount': emd_amount,
+                'attachments': [],  # Will be populated separately if needed
+                'document_count': doc_count,
                 'location': location,
                 'department': department,
-                'category': category,
+                'category': procurement_fields.get('tender_category'),
                 'eligibility': eligibility,
                 'specifications': specifications,
                 'terms_conditions': terms_conditions,
-                'specifications': specifications,
-                'terms_conditions': terms_conditions,
                 'contact_info': contact_info,
-                'tender_fee': tender_fee,
-                'emd_amount': emd_amount,
+                
+                # Procurement Summary additional fields
+                'sub_department': procurement_fields.get('sub_department'),
+                'form_of_contract': procurement_fields.get('form_of_contract'),
+                'product_category': procurement_fields.get('product_category'),
+                'tender_category': procurement_fields.get('tender_category'),
+                'sector_category': procurement_fields.get('sector_category'),
+                'ecv_visible_to_supplier': procurement_fields.get('ecv_visible_to_supplier'),
+                'currency_type': procurement_fields.get('currency_type'),
+                'currency_setting': procurement_fields.get('currency_setting'),
+                'completion_period': procurement_fields.get('completion_period'),
+                'procurement_type': procurement_fields.get('procurement_type'),
+                'consortium_joint_venture': procurement_fields.get('consortium_joint_venture'),
+                'rebate': procurement_fields.get('rebate'),
+                'alternate_decrypt': procurement_fields.get('alternate_decrypt'),
+                
+                # Calendar Details
+                'bid_document_download_start': calendar_fields.get('bid_document_download_start'),
+                'bid_document_download_end': calendar_fields.get('bid_document_download_end'),
+                'bid_submission_start': calendar_fields.get('bid_submission_start'),
+                'bid_submission_end': calendar_fields.get('bid_submission_end'),
+                'tender_nit_view_date': calendar_fields.get('tender_nit_view_date'),
+                'remarks': calendar_fields.get('remarks'),
+                'pre_bid_meeting': calendar_fields.get('pre_bid_meeting'),
+                'bid_validity_days': calendar_fields.get('bid_validity_days'),
+                
+                # Amount Details
+                'tender_fee_payable_to': amount_fields.get('tender_fee_payable_to'),
+                'tender_fee_payable_at': amount_fields.get('tender_fee_payable_at'),
+                'emd_payable_to': amount_fields.get('emd_payable_to'),
+                'emd_payable_at': amount_fields.get('emd_payable_at'),
+                'exempted_fee': amount_fields.get('exempted_fee'),
+                
+                # Other Details
+                'officer_inviting_bids': other_fields.get('officer_inviting_bids'),
+                'bid_opening_authority': other_fields.get('bid_opening_authority'),
+                'address': other_fields.get('address'),
+                
+                # Tender Stages
+                'stages': stages,
+                
                 'raw_html_snippet': content[:1000]
             }
             
@@ -502,26 +550,31 @@ class TenderExtractor:
         return None
     
     async def _extract_specifications(self, page: Page) -> Optional[str]:
-        """Extract technical specifications."""
-        selectors = [
-            '[class*="specification"]',
-            '[class*="technical"]',
-            'div:has-text("Specification")',
-            'div:has-text("Technical")',
-            'h3:has-text("Specifications") + *'
-        ]
-        
-        for selector in selectors:
-            try:
-                element = await page.query_selector(selector)
-                if element:
-                    text = await element.inner_text()
-                    if text and len(text) > 20:
-                        return text.strip()[:500]  # Limit length
-            except:
-                continue
-        
-        return None
+        """Extract documents from the 'Documents required for Stage' or main document table."""
+        try:
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Find the main documents table
+            doc_table = None
+            for table in soup.find_all('table'):
+                if 'document name' in table.get_text().lower() and 'sr no' in table.get_text().lower():
+                    doc_table = table
+                    break
+            
+            if doc_table:
+                docs = []
+                for row in doc_table.find_all('tr')[1:]:
+                    cells = row.find_all('td')
+                    if len(cells) >= 2:
+                        docs.append(f"{cells[0].get_text(strip=True)}. {cells[1].get_text(strip=True)}")
+                if docs:
+                    return "\n".join(docs)
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Error extracting specifications: {e}")
+            return None
     
     async def _extract_terms(self, page: Page) -> Optional[str]:
         """Extract terms and conditions."""
@@ -591,7 +644,7 @@ class TenderExtractor:
 
     async def _extract_script_value(self, page: Page, var_name: str) -> Optional[float]:
         content = await page.content()
-        match = re.search(f'var {var_name}\s*=\s*([\d\.]+)', content)
+        match = re.search(rf'var {var_name}\s*=\s*([\d\.]+)', content)
         if match:
             try:
                 return float(match.group(1))
@@ -609,3 +662,251 @@ class TenderExtractor:
         if match:
             return match.group(1)
         return None
+
+    async def _extract_table_field(self, page: Page, label: str) -> Optional[str]:
+        """
+        Extract value from table-based layout using BeautifulSoup to parse table tags.
+        More reliable than regex for structured HTML tables.
+        """
+        try:
+            import html as html_lib
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Strategy 1: Find the label in a <td> and get the next <td> sibling
+            for td in soup.find_all('td'):
+                td_text = td.get_text(strip=True)
+                if label.lower() in td_text.lower() or td_text.lower() in label.lower():
+                    # Found the label, now get the next td
+                    next_td = td.find_next_sibling('td')
+                    if next_td:
+                        value = next_td.get_text(strip=True)
+                        value = html_lib.unescape(value)
+                        if value and value not in ['N A', 'N/A', '']:
+                            return value
+            
+            # Strategy 2: Find label in <th> and get corresponding <td>
+            for th in soup.find_all('th'):
+                th_text = th.get_text(strip=True)
+                if label.lower() in th_text.lower() or th_text.lower() in label.lower():
+                    next_td = th.find_next_sibling('td')
+                    if next_td:
+                        value = next_td.get_text(strip=True)
+                        value = html_lib.unescape(value)
+                        if value and value not in ['N A', 'N/A', '']:
+                            return value
+            
+            # Strategy 3: Find in any element containing the label text
+            for element in soup.find_all(['div', 'span', 'strong', 'label']):
+                elem_text = element.get_text(strip=True)
+                if label in elem_text:
+                    # Try to find value in next sibling or parent's next sibling
+                    next_elem = element.find_next_sibling()
+                    if next_elem:
+                        value = next_elem.get_text(strip=True)
+                        value = html_lib.unescape(value)
+                        if value and value not in ['N A', 'N/A', '', label]:
+                            return value
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Error extracting table field '{label}': {e}")
+            return None
+
+    async def _extract_procurement_summary_fields(self, page: Page) -> Dict[str, Any]:
+        """Extract all fields from Procurement Summary section"""
+        fields = {}
+        
+        # Exact labels from the site's table structure
+        field_mapping = {
+            'Organization Name': 'organization',
+            'Location': 'location',
+            'Department': 'department',
+            'Sub Department': 'sub_department',
+            'IFB/Tender Notice No': 'ifb_number',
+            'Tender Type': 'tender_type_text',
+            'Tender title/Name Of Project': 'title',
+            'Description of Material/Name of Work': 'description',
+            'Sector Category': 'sector_category',
+            'Form of Contract': 'form_of_contract',
+            'Product Category': 'product_category',
+            'Tender Category': 'tender_category',
+            'Estimated Cost Value': 'estimated_cost_text',
+            'Is ECV Visible to Supplier?': 'ecv_visible_to_supplier',
+            'Tender Currency Type': 'currency_type',
+            'Tender Currency Setting': 'currency_setting',
+            'Period of Completion/Delivery Period': 'completion_period',
+            'Procurement Type': 'procurement_type',
+            'Consortium / Joint Venture': 'consortium_joint_venture',
+            'Rebate': 'rebate',
+            'Alternate decrypter': 'alternate_decrypt',
+        }
+        
+        for label, key in field_mapping.items():
+            value = await self._extract_table_field(page, label)
+            if value:
+                fields[key] = value
+        
+        # Try alternative labels for commonly missing fields
+        if not fields.get('title'):
+            alt_patterns = ['Name Of Work', 'Tender title', 'Name of Project', 'Description of Material']
+            for pattern in alt_patterns:
+                alt_title = await self._extract_table_field(page, pattern)
+                if alt_title and len(alt_title) > 10:
+                    fields['title'] = alt_title
+                    break
+        
+        if not fields.get('ifb_number'):
+            # Try specific regex for IFB/Tender pattern to avoid partial matches like "tice"
+            content = await page.content()
+            # Match patterns like MSNCO/12/2026 or similar
+            match = re.search(r'([A-Z0-9]{3,}/[0-9/]{4,})', content)
+            if match:
+                fields['ifb_number'] = match.group(1).strip()
+            else:
+                match = re.search(r'(?:IFB|Tender|Notice)\s*(?:No|Number)?[:\s-]*([A-Z0-9\-/]{5,})', content, re.IGNORECASE)
+                if match:
+                    fields['ifb_number'] = match.group(1).strip()
+        
+        return fields
+
+    async def _extract_calendar_details(self, page: Page) -> Dict[str, Any]:
+        """Extract all fields from Calendar Details section"""
+        fields = {}
+        
+        field_mapping = {
+            'Bid Document Download Start Date': 'bid_document_download_start',
+            'Bid document download End Date': 'bid_document_download_end',
+            'Bid Submission Start Date': 'bid_submission_start',
+            'Bid Submission Closing Date': 'bid_submission_end',
+            'Tender NIT View Date': 'tender_nit_view_date',
+            'Remarks': 'remarks',
+            'Pre-Bid Meeting': 'pre_bid_meeting',
+            'Bid validity': 'bid_validity_text',
+        }
+        
+        for label, key in field_mapping.items():
+            value = await self._extract_table_field(page, label)
+            if value:
+                fields[key] = value
+        
+        # Extract bid validity as integer (days)
+        if 'bid_validity_text' in fields:
+            match = re.search(r'(\d+)\s*Days?', fields['bid_validity_text'], re.IGNORECASE)
+            if match:
+                fields['bid_validity_days'] = int(match.group(1))
+        
+        return fields
+
+    async def _extract_amount_details(self, page: Page) -> Dict[str, Any]:
+        """Extract all fields from Amount Details section"""
+        fields = {}
+        
+        field_mapping = {
+            'Bidding Processing Fee ( OFFLINE )': 'tender_fee_text',
+            'Bidding Processing Fee Payable to': 'tender_fee_payable_to',
+            'Bidding Processing Fee Payable at': 'tender_fee_payable_at',
+            'Bid Security/EMD/Proposal Security INR ( OFFLINE )': 'emd_amount_text',
+            'Bid Security/EMD/Proposal Security INR Payable to': 'emd_payable_to',
+            'Bid Security/EMD/Proposal Security INR Payable at': 'emd_payable_at',
+            'Exempted Fee': 'exempted_fee',
+        }
+        
+        for label, key in field_mapping.items():
+            value = await self._extract_table_field(page, label)
+            if value:
+                fields[key] = value
+        
+        return fields
+
+    async def _extract_other_details(self, page: Page) -> Dict[str, Any]:
+        """Extract all fields from Other Details section"""
+        fields = {}
+        
+        field_mapping = {
+            'Officer Inviting Bids': 'officer_inviting_bids',
+            'Bid Opening Authority': 'bid_opening_authority',
+            'Address': 'address',
+            'Contact Details': 'contact_details_text',
+        }
+        
+        for label, key in field_mapping.items():
+            value = await self._extract_table_field(page, label)
+            if value:
+                fields[key] = value
+        
+        return fields
+
+    async def _extract_tender_stages(self, page: Page) -> List[Dict[str, Any]]:
+        """Extract tender stages information including forms and required documents using BeautifulSoup"""
+        stages = []
+        
+        try:
+            import html as html_lib
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # 1. Extract stage summary table
+            stage_table = None
+            for table in soup.find_all('table'):
+                header_text = table.get_text().lower()
+                if 'stage name' in header_text and 'evaluation date' in header_text:
+                    stage_table = table
+                    break
+            
+            if stage_table:
+                for row in stage_table.find_all('tr')[1:]: # Skip header
+                    cells = row.find_all('td')
+                    if len(cells) >= 3:
+                        stage = {
+                            'stage_name': html_lib.unescape(cells[0].get_text(strip=True)),
+                            'evaluation_date': html_lib.unescape(cells[1].get_text(strip=True)),
+                            'minimum_forms': html_lib.unescape(cells[2].get_text(strip=True)),
+                            'forms': [],
+                            'required_documents': []
+                        }
+                        stages.append(stage)
+            
+            # 2. Extract specific forms/documents for each stage
+            # The page structure often has a header like "1. Preliminary Stage" followed by a table of forms
+            # and another header like "Documents required for Stage" followed by a table of documents
+            
+            containers = soup.find_all(['div', 'table'])
+            for idx, stage in enumerate(stages):
+                stage_name = stage['stage_name'].lower().split('(')[0].strip()
+                
+                # Look for forms table
+                for table in soup.find_all('table'):
+                    prev_header = table.find_previous(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div'])
+                    if prev_header and stage_name in prev_header.get_text().lower() and 'form id' in table.get_text().lower():
+                        for row in table.find_all('tr')[1:]:
+                            cells = row.find_all('td')
+                            if len(cells) >= 5:
+                                form = {
+                                    'form_id': cells[0].get_text(strip=True),
+                                    'form_name': cells[1].get_text(strip=True),
+                                    'form_mode': cells[2].get_text(strip=True),
+                                    'submission_type': cells[3].get_text(strip=True),
+                                    'mandatory': cells[4].get_text(strip=True)
+                                }
+                                stage['forms'].append(form)
+                
+                # Look for required documents table
+                for table in soup.find_all('table'):
+                    prev_header = table.find_previous(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div'])
+                    if prev_header and 'documents required' in prev_header.get_text().lower() and stage_name in prev_header.get_text().lower():
+                        for row in table.find_all('tr')[1:]:
+                            cells = row.find_all('td')
+                            if len(cells) >= 3:
+                                doc = {
+                                    'sr_no': cells[0].get_text(strip=True),
+                                    'document_name': cells[1].get_text(strip=True),
+                                    'mandatory': cells[2].get_text(strip=True)
+                                }
+                                stage['required_documents'].append(doc)
+            
+        except Exception as e:
+            logger.debug(f"Error extracting complex tender stages: {e}")
+        
+        return stages
+

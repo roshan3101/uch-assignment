@@ -165,7 +165,7 @@ def main(
         keyword=search,
         organization=organization,
         tender_type=TenderType[tender_type.upper()] if tender_type else None,
-        tender_status=TenderStatus[status.upper().replace('_', ' ')] if status else None,
+        tender_status=TenderStatus[status.upper()] if status else None,
         min_value=min_value,
         max_value=max_value
     )

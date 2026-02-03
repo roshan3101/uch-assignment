@@ -108,6 +108,47 @@ class Tender(BaseModel):
     terms_conditions: Optional[str] = Field(None, description="Terms and conditions")
     contact_info: Optional[Dict[str, str]] = Field(None, description="Contact information")
     
+    # Procurement Summary additional fields
+    sub_department: Optional[str] = Field(None, description="Sub department name")
+    form_of_contract: Optional[str] = Field(None, description="Form of contract")
+    product_category: Optional[str] = Field(None, description="Product category")
+    tender_category: Optional[str] = Field(None, description="Tender category (WORKS/GOODS/SERVICES)")
+    sector_category: Optional[str] = Field(None, description="Sector category")
+    ecv_visible_to_supplier: Optional[str] = Field(None, description="Is ECV visible to supplier")
+    currency_type: Optional[str] = Field(None, description="Tender currency type")
+    currency_setting: Optional[str] = Field(None, description="Tender currency setting")
+    completion_period: Optional[str] = Field(None, description="Period of completion/delivery period")
+    procurement_type: Optional[str] = Field(None, description="Procurement type")
+    consortium_joint_venture: Optional[str] = Field(None, description="Consortium/Joint Venture")
+    rebate: Optional[str] = Field(None, description="Rebate information")
+    alternate_decrypt: Optional[str] = Field(None, description="Alternate decrypt")
+    
+    # Calendar Details
+    bid_document_download_start: Optional[str] = Field(None, description="Bid document download start date")
+    bid_document_download_end: Optional[str] = Field(None, description="Bid document download end date")
+    bid_submission_start: Optional[str] = Field(None, description="Bid submission start date")
+    bid_submission_end: Optional[str] = Field(None, description="Bid submission closing date")
+    tender_nit_view_date: Optional[str] = Field(None, description="Tender NIT view date")
+    remarks: Optional[str] = Field(None, description="Remarks")
+    pre_bid_meeting: Optional[str] = Field(None, description="Pre-bid meeting information")
+    bid_validity_days: Optional[int] = Field(None, description="Bid validity in days", ge=0)
+    
+    # Amount Details
+    tender_fee_payable_to: Optional[str] = Field(None, description="Tender fee payable to")
+    tender_fee_payable_at: Optional[str] = Field(None, description="Tender fee payable at")
+    emd_payable_to: Optional[str] = Field(None, description="EMD payable to")
+    emd_payable_at: Optional[str] = Field(None, description="EMD payable at")
+    exempted_fee: Optional[str] = Field(None, description="Exempted fee")
+    
+    # Other Details
+    officer_inviting_bids: Optional[str] = Field(None, description="Officer inviting bids")
+    bid_opening_authority: Optional[str] = Field(None, description="Bid opening authority")
+    address: Optional[str] = Field(None, description="Full address")
+    
+    # Tender Stages (structured data)
+    stages: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="Tender stages information")
+    
+    
     raw_html_snippet: Optional[str] = Field(
         None,
         description="Raw HTML snippet for debugging"
